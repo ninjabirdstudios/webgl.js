@@ -1,0 +1,100 @@
+/// UNDERSTAND THE PROBLEM
+/// CHOOSE THE RIGHT ABSTRACTIONS
+
+/// High-level front-end, accepts commands and outputs command buffer
+/// v -> drawSprite(x, y, image, ...) => { CMD_DRAW_SPRITE, ... }
+/// HIGH-LEVEL IS APPLICATION-SPECIFIC
+/// Middle layer accepts command buffer, optimizes, translates to render back-end
+/// ^ -> build ArrayBuffers with sprite vertex data
+/// MIDDLE LAYER IS APPLICATION-SPECIFIC AND BACK-END SPECIFIC
+/// Low-level provides basic abstractions to make working with render back-end less tedious
+/// v -> bindBuffers(...) => gl.bufferSubData(ArrayBuffer), etc.
+/// LOW-LEVEL IS REUSABLE AS IT DEALS ONLY WITH RESOURCE CREATION AND USE
+///
+/// WebGL  <=> WebGLRenderer  <= (command buffer) <= SpriteEngine
+/// Canvas <=> CanvasRenderer <= (command buffer) <= SpriteEngine
+/// SpriteEngine can run on a separate thread. Everything else must
+/// run on the UI thread. WebGLRenderer/CanvasRenderer would maintain
+/// the resource lists. WebGL and Canvas are basically collections of
+/// helper functions and data types. They could be collapsed into the
+/// WebGLRenderer and CanvasRenderer, but we keep them separate because
+/// they are re-usable across projects. In this regard, bitstorm.js is
+/// pretty pointless except as glue that binds everything together. The
+/// functionality ought to be split out into separate libraries:
+/// graphics.js => contains webgl.js and canvas.js.
+/// spritestorm.js => contains render_gl.js, render_canvas.js and spritestorm.js
+///  => needs to dynamically load modules based on support. need a minimal
+/// conditional loader. see functions from yepnope.js below. render_gl.js
+/// does any caching and buffer maintenence. something like:
+/// loadScript({
+///     test   : function () { /* is web gl supported? */ },
+///     pass   : ['graphics.js/webgl.js',  'render_gl.js'],
+///     fail   : ['graphics.js/canvas.js', 'render_canvas.js'],
+///     done   : function (e) { /* do whatever */ }
+/// });
+/// And need a SpriteStorm.createRenderer() function to kick it off.
+
+function loadScript(args)
+{
+    args          = args || {};
+    args.test     = args.test || function () { return true; };
+    args.pass     = args.pass || [];
+    args.fail     = args.fail || [];
+    args.done     = args.done || function () { /* empty */  };
+    var scripts   = args.test() ? args.pass : args.fail;
+    var ntotal    = scripts.length();
+    var ndone     = 0;
+    for (var i    = 0,  n = scripts.length; i < n; ++i)
+    {
+        var se    = document.createElement('script');
+        se.src    = scripts[i];
+        se.type   = 'text/javascript';
+        se.async  = false;      // force execution in insertion order.
+        se.onload = se.onreadystatechange = function ()
+            {
+                var  rs  = se.readyState; // undefined for all but IE
+                if (!rs || rs === 'loaded' || rs === 'complete')
+                {
+                    // remove the handlers so we don't get notified again.
+                    se.onload   = se.onreadystatechange = null;
+                    // notify the caller if all scripts are loaded.
+                    if (++ndone === ntotal) args.done();
+                }
+            };
+        // @note: your script will hang if there's an error.
+        // insert the script node. this causes the script to load async.
+        var fs = document.getElementsByTagName('script')[0];
+        fs.parentNode.insertBefore(se, fs);
+    }
+    if (0 === scripts.length)  args.done();
+}
+
+/// Need to implement an abstraction for vertex formats. But maybe this is
+/// a higher-level thing and for now I just need to focus on raw buffers.
+/// Vertex formats are only required to set up data for rendering by binding
+/// vertex shader attributes.
+/// [
+///   {
+///     'attributeName'      : 'vPOS',       // user-defined; must match vs; used to look up attribute index
+///     'attributeType'      : 'FLOAT',      // raw underlying data type
+///     'attributeOffset'    : 0,            // offset from start of buffer
+///     'attributeDimension' : 3             // attribute has 3 components
+///   }
+/// ]
+/// want to basically do the following:
+/// bindProgram(program)
+/// bindUniforms(program, ???)
+/// // vertexAttributes and attributeBuffers are 1-1
+/// bindBuffers(program, vertexAttributes[], attributeBuffers[], elementBuffer)
+/// drawElements(...)
+
+/// Also need an abstraction for render-to-texture.
+
+/// Shader programs need a higher-level abstraction. Whenever a draw
+/// command is to be issued, the shader setup routine needs to run. This
+/// routine takes arguments specifying any constant data, textures, vertex
+/// formats and data buffers. It sets any shader uniforms and binds data
+/// buffers to vertex shader attribute locations. The shader program needs
+/// to define a vertex format. When it is passed a set of vertex attributes
+/// and attribute buffers, it can match things up and bind only the data it
+/// requires.

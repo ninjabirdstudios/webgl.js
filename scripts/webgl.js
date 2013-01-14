@@ -211,7 +211,7 @@ var WebGL = (function (exports)
     /// global render state and all resource managemen and data upload.
     /// @param gl The WebGLRenderingContext object.
     /// @param canvas The DOM Canvas element used to create context @a gl.
-    function GLContext = function (gl, canvas)
+    var GLContext = function (gl, canvas)
     {
         if (!(this instanceof GLContext))
         {
@@ -243,7 +243,7 @@ var WebGL = (function (exports)
     GLContext.prototype.handleContextLost = function (event)
     {
         event.preventDefault();
-        emit('context:lost', this);
+        this.emit('context:lost', this);
     };
 
     /// Handler for the Canvas webglcontextrestored event. The handler emits a
@@ -251,7 +251,7 @@ var WebGL = (function (exports)
     /// @param event The DOM Event object.
     GLContext.prototype.handleContextRestored = function (event)
     {
-        emit('context:restored', this);
+        this.emit('context:restored', this);
     };
 
     /// Creates an object specifying the properties of the viewport.
@@ -956,7 +956,7 @@ var WebGL = (function (exports)
             uniformLocations       : {},
             attributeNames         : [],
             attributeTypes         : {},
-            attributeIndices       : [],
+            attributeIndices       : {},
         };
     };
 
@@ -1012,7 +1012,7 @@ var WebGL = (function (exports)
                 var stage = BuildStage.COMPILE_VS;
                 gl.deleteShader(fs);
                 gl.deleteShader(vs);
-                emit('compile:error', stage, vss, log);
+                this.emit('compile:error', this, stage, vss, log);
                 return false;
             }
 
@@ -1026,7 +1026,7 @@ var WebGL = (function (exports)
                 var stage = BuildStage.COMPILE_FS;
                 gl.deleteShader(fs);
                 gl.deleteShader(vs);
-                emit('compile:error', stage, fss, log);
+                this.emit('compile:error', this, stage, fss, log);
                 return false;
             }
 
@@ -1103,7 +1103,7 @@ var WebGL = (function (exports)
                 gl.deleteProgram(po);
                 gl.deleteShader (fs);
                 gl.deleteShader (vs);
-                emit('linker:error', stage, vss+'\n\n'+fss, log);
+                this.emit('linker:error', this, stage, vss+'\n\n'+fss, log);
                 return false;
             }
 
@@ -1674,19 +1674,266 @@ var WebGL = (function (exports)
     /// vertex record.
     /// @param dimension The number of values of the specified type that make
     /// up the attribute; for example, 3 indicates a 3-component vector.
+    /// @param normalize A boolean value indicating whether the hardware should
+    /// convert non-floating point data into the range [0, 1] before use. The
+    /// default value is false.
     /// @return An object describing the vertex attribute.
     /// obj.name The name of the attribute.
     /// obj.dataType The WebGL data type of the attribute.
     /// obj.byteOffset The byte offset from the start of the vertex.
     /// obj.dimension The number of values that make up the attribute.
-    GLContext.prototype.createAttribute = function (name, type, offset, dimension)
+    /// obj.normalize A boolean value indicating whether the hardware will
+    /// convert non-floating point data into the range [0, 1] before use.
+    GLContext.prototype.createAttribute = function createAttribute(name, type, offset, dimension, normalize)
     {
         return {
             name       : name,
             dataType   : this.gl[type],
             byteOffset : offset,
-            dimension  : dimension
+            dimension  : dimension,
+            normalize  : normalize || false
         };
+    };
+
+    /// Sets the array buffer data sources for each vertex attribute for the
+    /// active program object.
+    /// @param attributes An array of vertex attribute descriptors. See the
+    /// function @a GLContext.createAttribute().
+    /// @param buffers An array of buffer resource proxies specifying the data
+    /// sources for each vertex attribute. Items in this array have a one-to-one
+    /// correspondence with @a attributes, such that attributes[i] is sourced
+    /// from buffers[i].
+    /// @return The GLContext.
+    GLContext.prototype.enableAttributes = function (attributes, buffers)
+    {
+        if (!this.activeProgram)
+            return this;
+
+        var gl      = this.gl;
+        var shader  = this.activeProgram;
+        var indices = shader.attributeIndices;
+        for (var i  = 0, n = attributes.length; i < n; ++i)
+        {
+            var ar  = attributes[i];
+            var ab  = buffers[i];
+            var ai  = indices[ar.name];
+            gl.enableVertexAttribArray(ai);
+            gl.vertexAttribPointer(
+                ai,
+                ar.dimension,
+                ar.dataType,
+                ar.normalize,
+                ab.elementSize,
+                ar.byteOffset);
+        }
+        return this;
+    };
+
+    /// Sets a constant vertex attribute value for the active program object.
+    /// @param name The name of the attribute. This should match the name of
+    /// the attribute in the currently bound vertex shader.
+    /// @param value The constant attribute value. For vector attribute types
+    /// this is either a JavaScript Number array or Float32Array instance. For
+    /// scalar attribute types, this is a single JavaScript Number value.
+    /// @return The GLContext.
+    GLContext.prototype.setConstantAttribute = function (name, value)
+    {
+        if (!this.activeProgram)
+            return this;
+
+        var     gl     = this.gl;
+        var     glsl   = TypeNames;
+        var     shader = this.activeProgram;
+        var     index  = shader.attributeIndices[name];
+        var     type   = shader.attributeTypes[name];
+        switch (type)
+        {
+            case glsl.VEC4:
+                gl.vertexAttrib4fv(index, value);
+                break;
+            case glsl.VEC3:
+                gl.vertexAttrib3fv(index, value);
+                break;
+            case glsl.VEC2:
+                gl.vertexAttrib2fv(index, value);
+                break;
+            case glsl.FLOAT:
+                gl.vertexAttrib1f(index, value);
+                break;
+        }
+        gl.disableVertexAttribArray(index); // use the constant attribute value
+        return this;
+    }
+
+    /// Computes the size of a single buffer attribute, in bytes, based on its
+    /// type and dimension.
+    /// @param attribute A vertex attribute descriptor. See the function
+    /// @a GLContext.createAttribute().
+    /// @return The size of the specified vertex attribute, in bytes.
+    GLContext.prototype.computeAttributeSize = function (attribute)
+    {
+        if (!attribute)
+            return 0;
+
+        var     gl = this.gl;
+        switch (attribute.dataType)
+        {
+            case gl.FLOAT:
+            case gl.INT:
+            case gl.UNSIGNED_INT:
+                return 4 * attribute.dimension;
+            case gl.BYTE:
+            case gl.UNSIGNED_BYTE:
+                return 1 * attribute.dimension;
+            case gl.SHORT:
+            case gl.UNSIGNED_SHORT:
+                return 2 * attribute.dimension;
+            default:
+                break;
+        }
+        return 0;
+    };
+
+    /// Computes the size of a logical buffer element composed of one or more
+    /// sub-elements.
+    /// @param attributes The vertex attribute descriptors for each sub-element
+    /// in the buffer. See the function @a GLContext.createAttribute().
+    /// @return The size of the specified buffer element, in bytes.
+    GLContext.prototype.computeBufferElementSize = function (attributes)
+    {
+        var count  = attributes.length;
+        if (count == 0)
+            return 0;
+
+        // sum the byte offsets and then add in the size of the final attribute.
+        // this ensures that we properly account for any user-added padding.
+        var total  = 0;
+        for (var i = 0, n = count - 1; i < n; ++i)
+            total += attributes[i].byteOffset;
+        return total + this.computeAttributeSize(attributes[count-1]);
+    };
+
+    /// Given a set of vertex attribute definitions and a set of arrays filled
+    /// with data for each individual attribute, constructs an interleaved
+    /// ArrayBuffer containing the vertex data.
+    /// @param attributes The vertex attribute descriptors for each sub-element
+    /// in the buffer. See the function @a GLContext.createAttribute().
+    /// @param arrays An array of JavaScript arrays. Each element specifies the
+    /// data for the corresponding vertex attribute.
+    /// @param count The number of vertices specified by the arrays.
+    /// @return A new ArrayBuffer instance containing the interleaved data.
+    GLContext.prototype.interleaveArrays = function (attributes, arrays, count)
+    {
+        var gl     = this.gl;
+        var esize  = this.computeBufferElementSize(attributes);
+        var buffer = new ArrayBuffer(esize * count);
+        var offset = new Array(attributes.length);
+        var sizes  = new Array(attributes.length);
+        var views  = new Array(attributes.length);
+
+        // create views of buffer; pre-calculate sizes and offsets for each.
+        for (var i = 0, n = attributes.length; i < n; ++i)
+        {
+            var ar = attributes[i];
+            switch  (ar.dataType)
+            {
+                case gl.FLOAT:
+                    views[i]    = new Float32Array(buffer);
+                    sizes[i]    = esize         / 4; // 4 = sizeof(float)
+                    offset[i]   = ar.byteOffset / 4; // 4 = sizeof(float)
+                    break;
+                case gl.UNSIGNED_BYTE:
+                    views[i]    = new Uint8Array(buffer);
+                    sizes[i]    = esize;
+                    offset[i]   = ar.byteOffset;
+                    break;
+                case gl.UNSIGNED_SHORT:
+                    views[i]    = new Uint16Array(buffer);
+                    sizes[i]    = esize         / 2; // 2 = sizeof(uint16_t)
+                    offset[i]   = ar.byteOffset / 2; // 2 = sizeof(uint16_t)
+                    break;
+                case gl.UNSIGNED_INT:
+                    views[i]    = new Uint32Array(buffer);
+                    sizes[i]    = esize         / 4; // 4 = sizeof(uint32_t)
+                    offset[i]   = ar.byteOffset / 4; // 4 = sizeof(uint32_t)
+                    break;
+                case gl.BYTE:
+                    views[i]    = new Int8Array(buffer);
+                    sizes[i]    = esize;
+                    offset[i]   = ar.byteOffset;
+                    break;
+                case gl.SHORT:
+                    views[i]    = new Int16Array(buffer);
+                    sizes[i]    = esize         / 2; // 2 = sizeof(int16_t)
+                    offset[i]   = ar.byteOffset / 2; // 2 = sizeof(int16_t)
+                    break;
+                case gl.INT:
+                    views[i]    = new Int32Array(buffer);
+                    sizes[i]    = esize         / 4; // 4 = sizeof(int32_t)
+                    offset[i]   = ar.byteOffset / 4; // 4 = sizeof(int32_t)
+                    break;
+                default:
+                    // vertex attribute has an invalid type.
+                    return null;
+            }
+        }
+
+        // copy data to the interleaved array.
+        for (var i = 0; i < count; ++i) /* each vertex */
+        {
+            for (var j = 0, n = attributes.length; j < n; ++j) /* each attrib */
+            {
+                var ar = attributes[j];// select the vertex attribute record
+                var sa = arrays[j];    // select the source data array
+                var o  = offset[j];    // offset of element in FLOAT, etc.
+                var dv = views[j];     // view for element
+                var vd = ar.dimension; // vector dimension
+                var bi = i * vd;       // base index of vertices[i] data
+                for (var k = 0; k < vd; ++k)
+                    dv[o + k]  = sa[bi  + k];
+                offset[j] += sizes[j]; // move to the next element in view
+            }
+        }
+        return buffer;
+    };
+
+    /// Submits a batch of (non-indexed) triangles to be rendered.
+    /// @param count The number of vertices to read. The number of triangles
+    /// submitted in the batch is @a count / 3.
+    /// @param startIndex The zero-based index of the first vertex to read.
+    /// @return The GLContext.
+    GLContext.prototype.drawPrimitives = function (count, startIndex)
+    {
+        startIndex  = startIndex || 0;
+        var gl      = this.gl;
+        gl.drawArrays(gl.TRIANGLES, startIndex, count);
+        return this;
+    };
+
+    /// Submits a batch of indexed triangles to be rendered.
+    /// @param count The number of indices to read. The number of triangles
+    /// submitted in the batch is @a count / 3.
+    /// @param startIndex The zero-based index of the first vertex index.
+    /// @return The GLContext.
+    GLContext.prototype.drawIndexed = function (count, startIndex)
+    {
+        if (!this.activeElementBuffer)
+            return this;
+
+        var type;
+        var gl      = this.gl;
+        var indices = this.activeElementBuffer;
+        startIndex  = startIndex || 0;
+        var offset  = startIndex  * indices.elementSize;
+        switch (indices.elementSize)
+        {
+            case 1:  type = gl.UNSIGNED_BYTE;   break;
+            case 2:  type = gl.UNSIGNED_SHORT;  break;
+            case 4:  type = gl.UNSIGNED_INT;    break;
+            default: return this;
+        }
+        gl.drawElements(gl.TRIANGLES, count, type, offset);
+        return this;
     };
 
     /// Performs a test to determine whether the current runtime environment
@@ -1731,109 +1978,6 @@ var WebGL = (function (exports)
             if (gl) return new GLContext(gl, canvas);
         }
     }
-
-    /// UNDERSTAND THE PROBLEM
-    /// CHOOSE THE RIGHT ABSTRACTIONS
-
-    /// High-level front-end, accepts commands and outputs command buffer
-    /// v -> drawSprite(x, y, image, ...) => { CMD_DRAW_SPRITE, ... }
-    /// HIGH-LEVEL IS APPLICATION-SPECIFIC
-    /// Middle layer accepts command buffer, optimizes, translates to render back-end
-    /// ^ -> build ArrayBuffers with sprite vertex data
-    /// MIDDLE LAYER IS APPLICATION-SPECIFIC AND BACK-END SPECIFIC
-    /// Low-level provides basic abstractions to make working with render back-end less tedious
-    /// v -> bindBuffers(...) => gl.bufferSubData(ArrayBuffer), etc.
-    /// LOW-LEVEL IS REUSABLE AS IT DEALS ONLY WITH RESOURCE CREATION AND USE
-    ///
-    /// WebGL  <=> WebGLRenderer  <= (command buffer) <= SpriteEngine
-    /// Canvas <=> CanvasRenderer <= (command buffer) <= SpriteEngine
-    /// SpriteEngine can run on a separate thread. Everything else must
-    /// run on the UI thread. WebGLRenderer/CanvasRenderer would maintain
-    /// the resource lists. WebGL and Canvas are basically collections of
-    /// helper functions and data types. They could be collapsed into the
-    /// WebGLRenderer and CanvasRenderer, but we keep them separate because
-    /// they are re-usable across projects. In this regard, bitstorm.js is
-    /// pretty pointless except as glue that binds everything together. The
-    /// functionality ought to be split out into separate libraries:
-    /// graphics.js => contains webgl.js and canvas.js.
-    /// spritestorm.js => contains render_gl.js, render_canvas.js and spritestorm.js
-    ///  => needs to dynamically load modules based on support. need a minimal
-    /// conditional loader. see functions from yepnope.js below. render_gl.js
-    /// does any caching and buffer maintenence. something like:
-    /// loadScript({
-    ///     test   : function () { /* is web gl supported? */ },
-    ///     pass   : ['graphics.js/webgl.js',  'render_gl.js'],
-    ///     fail   : ['graphics.js/canvas.js', 'render_canvas.js'],
-    ///     done   : function (e) { /* do whatever */ }
-    /// });
-    /// And need a SpriteStorm.createRenderer() function to kick it off.
-
-    function loadScript(args)
-    {
-        args          = args || {};
-        args.test     = args.test || function () { return true; };
-        args.pass     = args.pass || [];
-        args.fail     = args.fail || [];
-        args.done     = args.done || function () { /* empty */  };
-        var scripts   = args.test() ? args.pass : args.fail;
-        var ntotal    = scripts.length();
-        var ndone     = 0;
-        for (var i    = 0,  n = scripts.length; i < n; ++i)
-        {
-            var se    = document.createElement('script');
-            se.src    = scripts[i];
-            se.type   = 'text/javascript';
-            se.async  = false;      // force execution in insertion order.
-            se.onload = se.onreadystatechange = function ()
-                {
-                    var  rs  = se.readyState; // undefined for all but IE
-                    if (!rs || rs === 'loaded' || rs === 'complete')
-                    {
-                        // remove the handlers so we don't get notified again.
-                        se.onload   = se.onreadystatechange = null;
-                        // notify the caller if all scripts are loaded.
-                        if (++ndone === ntotal) args.done();
-                    }
-                };
-            // @note: your script will hang if there's an error.
-            // insert the script node. this causes the script to load async.
-            var fs = document.getElementsByTagName('script')[0];
-            fs.parentNode.insertBefore(se, fs);
-        }
-        if (0 === scripts.length)  args.done();
-    }
-
-    /// Need to implement an abstraction for vertex formats. But maybe this is
-    /// a higher-level thing and for now I just need to focus on raw buffers.
-    /// Vertex formats are only required to set up data for rendering by binding
-    /// vertex shader attributes.
-    /// [
-    ///   {
-    ///     'attributeName'      : 'vPOS',       // user-defined; must match vs; used to look up attribute index
-    ///     'attributeType'      : 'FLOAT',      // raw underlying data type
-    ///     'attributeOffset'    : 0,            // offset from start of buffer
-    ///     'attributeDimension' : 3             // attribute has 3 components
-    ///   }
-    /// ]
-    /// want to basically do the following:
-    /// bindProgram(program)
-    /// bindUniforms(program, ???)
-    /// // vertexAttributes and attributeBuffers are 1-1
-    /// bindBuffers(program, vertexAttributes[], attributeBuffers[], elementBuffer)
-    /// drawElements(...)
-
-    /// Also need an abstraction for state objects.
-
-    /// Also need an abstraction for render-to-texture.
-
-    /// Shader programs need a higher-level abstraction. Whenever a draw
-    /// command is to be issued, the shader setup routine needs to run. This
-    /// routine takes arguments specifying any constant data, textures, vertex
-    /// formats and data buffers. It sets any shader uniforms and binds data
-    /// buffers to vertex shader attribute locations. The shader program needs
-    /// to define a vertex format. When it is passed a set of vertex attributes
-    /// and attribute buffers, it can match things up and bind only the data it
-    /// requires.
 
     /// Set the functions exported from this module.
     exports.Emitter       = Emitter;
