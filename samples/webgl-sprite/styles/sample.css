@@ -1,0 +1,12 @@
+body {
+    margin: 0;
+}
+
+#sample_content {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 1024px;
+    height: 768px;
+    background-color: rgb(128,128,128);
+}

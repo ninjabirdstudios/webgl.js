@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en-US">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html;charset=utf-8"/>
+        <link href="styles/sample.css"  type="text/css" rel="stylesheet"/>
+        <script type="text/javascript"  src="scripts/webgl.js"></script>
+        <script type="text/javascript"  src="scripts/webgl_render2d.js"></script>
+        <script type="text/javascript"  src="scripts/main.js"></script>
+        <script type="text/plain"       id ="vert">
+            uniform   mat4 uMSS;
+            attribute vec4 aPTX;
+            attribute vec4 aCLR;
+            attribute vec3 aDGG;
+            varying   vec4 vCLR;
+            varying   vec2 vTEX;
+
+            void main()
+            {
+                vCLR          = aCLR;
+                vTEX          = aPTX.zw;
+                gl_Position   = uMSS * vec4(aPTX.xy, 0, 1);
+                gl_Position.z = aDGG.x;
+            }
+        </script>
+        <script type="text/plain"       id ="frag">
+            precision   mediump float;
+            uniform   sampler2D uTEX;
+            varying   vec2      vTEX;
+            varying   vec4      vCLR;
+
+            void main()
+            {
+                gl_FragColor = texture2D(uTEX, vTEX) * vCLR;
+            }
+        </script>
+        <title>WebGL.js - Screen-Space Sprite Sample</title>
+    </head>
+    <body>
+        <div id="content">
+            <header id="main_header">
+                <!-- header elements go here; maybe a logo and some text -->
+            </header>
+            <nav id="main_navigation">
+                <!-- navigation elements go here; ul and some li's -->
+            </nav>
+            <section id="sample_content">
+                <!-- The page's main content elements go here -->
+                <canvas id="canvas" width="1024" height="768">
+                    Your browser does not appear to support the canvas element.
+                </canvas>
+            </section>
+            <footer id="main_footer">
+                <!-- footer elements go here -->
+            </footer>
+        </div>
+    </body>
+</html>
